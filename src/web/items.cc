@@ -38,9 +38,8 @@
 #include "database/database.h"
 #include "upnp_xml.h"
 
-web::items::items(std::shared_ptr<Config> config, std::shared_ptr<Database> database,
-    std::shared_ptr<ContentManager> content, std::shared_ptr<SessionManager> sessionManager)
-    : WebRequestHandler(std::move(config), std::move(database), std::move(content), std::move(sessionManager))
+web::items::items(std::shared_ptr<ContentManager> content)
+    : WebRequestHandler(std::move(content))
 {
 }
 
@@ -67,7 +66,7 @@ void web::items::process()
     auto param = std::make_unique<BrowseParam>(parentID, BROWSE_DIRECT_CHILDREN | BROWSE_ITEMS);
     param->setRange(start, count);
 
-    if ((obj->getClass() == UPNP_DEFAULT_CLASS_MUSIC_ALBUM) || (obj->getClass() == UPNP_DEFAULT_CLASS_PLAYLIST_CONTAINER))
+    if ((obj->getClass() == UPNP_CLASS_MUSIC_ALBUM) || (obj->getClass() == UPNP_CLASS_PLAYLIST_CONTAINER))
         param->setFlag(BROWSE_TRACK_SORT);
 
     auto arr = database->browse(param);
@@ -124,7 +123,7 @@ void web::items::process()
     items.append_attribute("protect_items") = protectItems;
 
     for (const auto& obj : arr) {
-        //if (IS_CDS_ITEM(obj->getObjectType()))
+        //if (obj->isItem())
         //{
         auto item = items.append_child("item");
         item.append_attribute("id") = obj->getID();

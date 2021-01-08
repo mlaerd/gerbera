@@ -41,10 +41,6 @@
 #include "util/generic_task.h"
 #include "util/xml_to_json.h"
 
-// forward declaration
-class ContentManager;
-class Database;
-
 namespace web {
 
 class SessionException : public std::runtime_error {
@@ -68,7 +64,6 @@ class SessionManager;
 /// \brief This class is responsible for processing requests that come to the user interface.
 class WebRequestHandler : public RequestHandler {
 protected:
-    std::shared_ptr<ContentManager> content;
     std::shared_ptr<web::SessionManager> sessionManager;
 
     bool checkRequestCalled;
@@ -141,8 +136,7 @@ protected:
 
 public:
     /// \brief Constructor, currently empty.
-    WebRequestHandler(std::shared_ptr<Config> config, std::shared_ptr<Database> database,
-        std::shared_ptr<ContentManager> content, std::shared_ptr<web::SessionManager> sessionManager);
+    WebRequestHandler(std::shared_ptr<ContentManager> content);
 
     /// \brief Returns information about the requested content.
     /// \param filename Requested URL
@@ -158,9 +152,7 @@ public:
     /// \param filename The requested URL
     /// \param mode either UPNP_READ or UPNP_WRITE
     /// \return the appropriate IOHandler for the request.
-    std::unique_ptr<IOHandler> open(const char* filename,
-        enum UpnpOpenFileMode mode,
-        const std::string& range) override;
+    std::unique_ptr<IOHandler> open(const char* filename, enum UpnpOpenFileMode mode) override;
 
     /// \brief This method must be overridden by the subclasses that actually process the given request.
     virtual void process() = 0;

@@ -39,9 +39,8 @@
 #include "metadata/metadata_handler.h"
 #include "util/tools.h"
 
-web::edit_load::edit_load(std::shared_ptr<Config> config, std::shared_ptr<Database> database,
-    std::shared_ptr<ContentManager> content, std::shared_ptr<SessionManager> sessionManager)
-    : WebRequestHandler(std::move(config), std::move(database), std::move(content), std::move(sessionManager))
+web::edit_load::edit_load(std::shared_ptr<ContentManager> content)
+    : WebRequestHandler(std::move(content))
 {
 }
 
@@ -72,10 +71,9 @@ void web::edit_load::process()
     classEl.append_attribute("value") = obj->getClass().c_str();
     classEl.append_attribute("editable") = true;
 
-    int objectType = obj->getObjectType();
-    item.append_child("obj_type").append_child(pugi::node_pcdata).set_value(CdsObject::mapObjectType(objectType).c_str());
+    item.append_child("obj_type").append_child(pugi::node_pcdata).set_value(CdsObject::mapObjectType(obj->getObjectType()).c_str());
 
-    if (IS_CDS_ITEM(objectType)) {
+    if (obj->isItem()) {
         auto objItem = std::static_pointer_cast<CdsItem>(obj);
 
         auto description = item.append_child("description");
@@ -84,7 +82,7 @@ void web::edit_load::process()
 
         auto location = item.append_child("location");
         location.append_attribute("value") = objItem->getLocation().c_str();
-        if (IS_CDS_PURE_ITEM(objectType) || !objItem->isVirtual())
+        if (obj->isPureItem() || !obj->isVirtual())
             location.append_attribute("editable") = false;
         else
             location.append_attribute("editable") = true;
@@ -152,7 +150,7 @@ void web::edit_load::process()
             resIndex++;
         }
 
-        if (IS_CDS_ITEM_EXTERNAL_URL(objectType)) {
+        if (obj->isExternalItem()) {
             auto protocol = item.append_child("protocol");
             protocol.append_attribute("value") = getProtocol(objItem->getResource(0)->getAttribute(R_PROTOCOLINFO)).c_str();
             protocol.append_attribute("editable") = true;

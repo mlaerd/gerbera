@@ -44,13 +44,9 @@
 
 namespace web {
 
-WebRequestHandler::WebRequestHandler(std::shared_ptr<Config> config,
-    std::shared_ptr<Database> database,
-    std::shared_ptr<ContentManager> content,
-    std::shared_ptr<SessionManager> sessionManager)
-    : RequestHandler(std::move(config), std::move(database))
-    , content(std::move(content))
-    , sessionManager(std::move(sessionManager))
+WebRequestHandler::WebRequestHandler(std::shared_ptr<ContentManager> content)
+    : RequestHandler(std::move(content))
+    , sessionManager(this->content->getSessionManager())
     , checkRequestCalled(false)
 {
 }
@@ -222,9 +218,7 @@ std::unique_ptr<IOHandler> WebRequestHandler::open(enum UpnpOpenFileMode mode)
     return io_handler;
 }
 
-std::unique_ptr<IOHandler> WebRequestHandler::open(const char* filename,
-    enum UpnpOpenFileMode mode,
-    const std::string& range)
+std::unique_ptr<IOHandler> WebRequestHandler::open(const char* filename, enum UpnpOpenFileMode mode)
 {
     this->filename = filename;
     this->mode = mode;

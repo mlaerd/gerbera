@@ -3,7 +3,7 @@
     Gerbera - https://gerbera.io/
 
     config_setup.cc - this file is part of Gerbera.
-    Copyright (C) 2020 Gerbera Contributors
+    Copyright (C) 2020-2021 Gerbera Contributors
 
     Gerbera is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License version 2
@@ -142,7 +142,7 @@ size_t ConfigSetup::extractIndex(const std::string& item)
     return i;
 }
 
-const char* ConfigSetup::ROOT_NAME = "config";
+const char* const ConfigSetup::ROOT_NAME = "config";
 
 void ConfigStringSetup::makeOption(const pugi::xml_node& root, const std::shared_ptr<Config>& config, const std::map<std::string, std::string>* arguments)
 {

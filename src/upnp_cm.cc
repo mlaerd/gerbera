@@ -54,7 +54,7 @@ void ConnectionManagerService::doGetCurrentConnectionIDs(const std::unique_ptr<A
 {
     log_debug("start");
 
-    auto response = UpnpXMLBuilder::createResponse(request->getActionName(), DESC_CM_SERVICE_TYPE);
+    auto response = UpnpXMLBuilder::createResponse(request->getActionName(), UPNP_DESC_CM_SERVICE_TYPE);
     auto root = response->document_element();
     root.append_child("ConnectionID").append_child(pugi::node_pcdata).set_value("0");
 
@@ -77,7 +77,7 @@ void ConnectionManagerService::doGetProtocolInfo(const std::unique_ptr<ActionReq
 {
     log_debug("start");
 
-    auto response = UpnpXMLBuilder::createResponse(request->getActionName(), DESC_CM_SERVICE_TYPE);
+    auto response = UpnpXMLBuilder::createResponse(request->getActionName(), UPNP_DESC_CM_SERVICE_TYPE);
 
     std::vector<std::string> mimeTypes = database->getMimeTypes();
     std::string CSV = mimeTypesToCsv(mimeTypes);
@@ -130,7 +130,7 @@ void ConnectionManagerService::processSubscriptionRequest(const std::unique_ptr<
 #if defined(USING_NPUPNP)
     UpnpAcceptSubscriptionXML(
         deviceHandle, config->getOption(CFG_SERVER_UDN).c_str(),
-        DESC_CM_SERVICE_ID, xml, request->getSubscriptionID().c_str());
+        UPNP_DESC_CM_SERVICE_ID, xml, request->getSubscriptionID().c_str());
 #else
     IXML_Document* event = nullptr;
     int err = ixmlParseBufferEx(xml.c_str(), &event);
@@ -140,7 +140,7 @@ void ConnectionManagerService::processSubscriptionRequest(const std::unique_ptr<
 
     UpnpAcceptSubscriptionExt(deviceHandle,
         config->getOption(CFG_SERVER_UDN).c_str(),
-        DESC_CM_SERVICE_ID, event, request->getSubscriptionID().c_str());
+        UPNP_DESC_CM_SERVICE_ID, event, request->getSubscriptionID().c_str());
 
     ixmlDocument_free(event);
 #endif
@@ -158,7 +158,7 @@ void ConnectionManagerService::sendSubscriptionUpdate(const std::string& sourceP
 
 #if defined(USING_NPUPNP)
     UpnpNotifyXML(deviceHandle, config->getOption(CFG_SERVER_UDN).c_str(),
-        DESC_CM_SERVICE_ID, xml);
+        UPNP_DESC_CM_SERVICE_ID, xml);
 #else
     IXML_Document* event = nullptr;
     int err = ixmlParseBufferEx(xml.c_str(), &event);
@@ -169,7 +169,7 @@ void ConnectionManagerService::sendSubscriptionUpdate(const std::string& sourceP
 
     UpnpNotifyExt(deviceHandle,
         config->getOption(CFG_SERVER_UDN).c_str(),
-        DESC_CM_SERVICE_ID, event);
+        UPNP_DESC_CM_SERVICE_ID, event);
 
     ixmlDocument_free(event);
 #endif

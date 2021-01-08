@@ -4,7 +4,7 @@
 
     config_save.cc - this file is part of Gerbera.
 
-    Copyright (C) 2020 Gerbera Contributors
+    Copyright (C) 2020-2021 Gerbera Contributors
 
     Gerbera is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License version 2
@@ -40,9 +40,8 @@
 #include "upnp_xml.h"
 #include "util/upnp_clients.h"
 
-web::configSave::configSave(std::shared_ptr<Config> config, std::shared_ptr<Database> database,
-    std::shared_ptr<ContentManager> content, std::shared_ptr<SessionManager> sessionManager)
-    : WebRequestHandler(std::move(config), std::move(database), std::move(content), std::move(sessionManager))
+web::configSave::configSave(std::shared_ptr<ContentManager> content)
+    : WebRequestHandler(std::move(content))
 {
 }
 

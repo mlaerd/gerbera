@@ -3,7 +3,7 @@
     Gerbera - https://gerbera.io/
 
     config_setup.h - this file is part of Gerbera.
-    Copyright (C) 2020 Gerbera Contributors
+    Copyright (C) 2020-2021 Gerbera Contributors
 
     Gerbera is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License version 2
@@ -80,7 +80,7 @@ protected:
     }
 
 public:
-    static const char* ROOT_NAME;
+    static const char* const ROOT_NAME;
     config_option_t option;
     const char* xpath;
 

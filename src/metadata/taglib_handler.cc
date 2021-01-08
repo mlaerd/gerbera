@@ -51,11 +51,12 @@
 #include "cds_objects.h"
 #include "config/config_manager.h"
 #include "iohandler/mem_io_handler.h"
+#include "util/mime.h"
 #include "util/string_converter.h"
 #include "util/tools.h"
 
-TagLibHandler::TagLibHandler(std::shared_ptr<Config> config)
-    : MetadataHandler(std::move(config))
+TagLibHandler::TagLibHandler(std::shared_ptr<Config> config, std::shared_ptr<Mime> mime)
+    : MetadataHandler(std::move(config), std::move(mime))
 {
     entrySeparator = this->config->getOption(CFG_IMPORT_LIBOPTS_ENTRY_SEP);
     legacyEntrySeparator = this->config->getOption(CFG_IMPORT_LIBOPTS_ENTRY_LEGACY_SEP);
@@ -180,29 +181,24 @@ void TagLibHandler::populateGenericTags(const std::shared_ptr<CdsItem>& item, co
         return;
 
     const TagLib::Tag* tag = file.tag();
-
     for (size_t i = 0; i < mt_keys.size(); i++)
         addField(metadata_fields_t(i), file, tag, item);
 
-    int temp;
-
     const TagLib::AudioProperties* audioProps = file.audioProperties();
-
     if (!audioProps)
         return;
 
-    // note: UPnP requres bytes/second
-    temp = audioProps->bitrate() * 1024 / 8;
-
     auto res = item->getResource(0);
 
+    // UPnP bitrate is in bytes/second
+    int temp = audioProps->bitrate() * 1024 / 8; // kbit/second -> byte/second
     if (temp > 0) {
         res->addAttribute(R_BITRATE, std::to_string(temp));
     }
 
-    temp = audioProps->length();
+    temp = audioProps->lengthInMilliseconds();
     if (temp > 0) {
-        res->addAttribute(R_DURATION, secondsToHMS(temp));
+        res->addAttribute(R_DURATION, millisecondsToHMSF(temp));
     }
 
     temp = audioProps->sampleRate();
@@ -252,11 +248,11 @@ bool TagLibHandler::isValidArtworkContentType(const std::string& art_mimetype)
     return art_mimetype.find('/') != std::string::npos;
 }
 
-std::string TagLibHandler::getContentTypeFromByteVector(const TagLib::ByteVector& data)
+std::string TagLibHandler::getContentTypeFromByteVector(const TagLib::ByteVector& data) const
 {
     std::string art_mimetype = MIMETYPE_DEFAULT;
 #ifdef HAVE_MAGIC
-    art_mimetype = getMIMETypeFromBuffer(data.data(), data.size());
+    art_mimetype = mime->bufferToMimeType(data.data(), data.size());
     if (art_mimetype.empty())
         return MIMETYPE_DEFAULT;
 #endif

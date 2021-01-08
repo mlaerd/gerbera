@@ -35,19 +35,29 @@
 
 #include "common.h"
 #include "iohandler/io_handler.h"
+#include <map>
 #include <memory>
+#include <string>
 
 // forward declaration
 class Config;
+class Mime;
 class Database;
+class ContentManager;
+class CdsObject;
 
 class RequestHandler {
 public:
-    RequestHandler(std::shared_ptr<Config> config, std::shared_ptr<Database> database);
+    RequestHandler(std::shared_ptr<ContentManager> content);
 
+    /// \brief Returns information about the requested content.
+    /// \param filename Requested URL
+    /// \param info File_Info structure, quite similar to statbuf.
     virtual void getInfo(const char* filename, UpnpFileInfo* info) = 0;
 
-    virtual std::unique_ptr<IOHandler> open(const char* filename, enum UpnpOpenFileMode mode, const std::string& range) = 0;
+    /// \brief Prepares the output buffer and calls the process function.
+    /// \return IOHandler
+    virtual std::unique_ptr<IOHandler> open(const char* filename, enum UpnpOpenFileMode mode) = 0;
 
     /// \brief Splits the url into a path and parameters string.
     /// Only '?' and '/' separators are allowed, otherwise an exception will
@@ -62,11 +72,16 @@ public:
     /// parameters = "object_id=12345&transcode=wav"
     static void splitUrl(const char* url, char separator, std::string& path, std::string& parameters);
 
+    std::map<std::string, std::string> parseParameters(const char* filename, const char* baseLink);
+    std::shared_ptr<CdsObject> getObjectById(std::map<std::string, std::string> params);
+
     virtual ~RequestHandler() = default;
 
 protected:
     std::shared_ptr<Config> config;
+    std::shared_ptr<Mime> mime;
     std::shared_ptr<Database> database;
+    std::shared_ptr<ContentManager> content;
 };
 
 #endif // __REQUEST_HANDLER_H__

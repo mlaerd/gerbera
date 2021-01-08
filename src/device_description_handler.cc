@@ -4,7 +4,7 @@
 
     device_description_handler.cc - this file is part of Gerbera.
 
-    Copyright (C) 2020 Gerbera Contributors
+    Copyright (C) 2020-2021 Gerbera Contributors
 
     Gerbera is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License version 2
@@ -28,12 +28,10 @@
 #include "iohandler/mem_io_handler.h"
 #include "util/tools.h"
 
-DeviceDescriptionHandler::DeviceDescriptionHandler(std::shared_ptr<Config> config, std::shared_ptr<Database> database,
-    UpnpXMLBuilder* xmlBuilder)
-    : RequestHandler(std::move(config), std::move(database))
+DeviceDescriptionHandler::DeviceDescriptionHandler(std::shared_ptr<ContentManager> content, UpnpXMLBuilder* xmlBuilder)
+    : RequestHandler(std::move(content))
     , xmlBuilder(xmlBuilder)
 {
-
     auto desc = xmlBuilder->renderDeviceDescription();
 
     std::ostringstream buf;
@@ -54,7 +52,7 @@ void DeviceDescriptionHandler::getInfo(const char* filename, UpnpFileInfo* info)
     UpnpFileInfo_set_IsDirectory(info, 0);
 }
 
-std::unique_ptr<IOHandler> DeviceDescriptionHandler::open(const char* filename, enum UpnpOpenFileMode mode, const std::string& range)
+std::unique_ptr<IOHandler> DeviceDescriptionHandler::open(const char* filename, enum UpnpOpenFileMode mode)
 {
     log_debug("Device description requested");
 

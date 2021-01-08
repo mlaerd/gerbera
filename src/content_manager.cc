@@ -47,6 +47,7 @@
 #include "layout/fallback_layout.h"
 #include "metadata/metadata_handler.h"
 #include "update_manager.h"
+#include "util/mime.h"
 #include "util/process.h"
 #include "util/string_converter.h"
 #include "util/timer.h"
@@ -73,15 +74,6 @@
 #include "util/task_processor.h"
 #endif
 
-#ifdef HAVE_MAGIC
-// for older versions of filemagic
-extern "C" {
-#include <magic.h>
-}
-
-static struct magic_set* ms = nullptr;
-#endif
-
 ContentManager::ContentManager(const std::shared_ptr<Config>& config, const std::shared_ptr<Database>& database,
     std::shared_ptr<UpdateManager> update_manager, std::shared_ptr<web::SessionManager> session_manager,
     std::shared_ptr<Timer> timer, std::shared_ptr<TaskProcessor> task_processor,
@@ -94,30 +86,19 @@ ContentManager::ContentManager(const std::shared_ptr<Config>& config, const std:
     , task_processor(std::move(task_processor))
     , scripting_runtime(std::move(scripting_runtime))
     , last_fm(std::move(last_fm))
-    , extension_mimetype_map(config->getDictionaryOption(CFG_IMPORT_MAPPINGS_EXTENSION_TO_MIMETYPE_LIST))
 {
-    ignore_unknown_extensions = false;
-    extension_map_case_sensitive = false;
-
     taskID = 1;
     working = false;
     shutdownFlag = false;
     layout_enabled = false;
 
-    // loading extension - mimetype map
-    // we can always be sure to get a valid element because everything was prepared by the config manager
-
     ignore_unknown_extensions = config->getBoolOption(CFG_IMPORT_MAPPINGS_IGNORE_UNKNOWN_EXTENSIONS);
-
+    auto extension_mimetype_map = config->getDictionaryOption(CFG_IMPORT_MAPPINGS_EXTENSION_TO_MIMETYPE_LIST);
     if (ignore_unknown_extensions && (extension_mimetype_map.empty())) {
         log_warning("Ignore unknown extensions set, but no mappings specified");
         log_warning("Please review your configuration!");
         ignore_unknown_extensions = false;
     }
-
-    extension_map_case_sensitive = config->getBoolOption(CFG_IMPORT_MAPPINGS_EXTENSION_TO_MIMETYPE_CASE_SENSITIVE);
-
-    mimetype_upnpclass_map = config->getDictionaryOption(CFG_IMPORT_MAPPINGS_MIMETYPE_TO_UPNP_CLASS_LIST);
 
     mimetype_contenttype_map = config->getDictionaryOption(CFG_IMPORT_MAPPINGS_MIMETYPE_TO_CONTENTTYPE_LIST);
 
@@ -164,25 +145,8 @@ void ContentManager::run()
     // Start INotify thread
     inotify->run();
 #endif
-/* init filemagic */
-#ifdef HAVE_MAGIC
-    if (!ignore_unknown_extensions) {
-        ms = magic_open(MAGIC_MIME);
-        if (ms == nullptr) {
-            log_error("magic_open failed");
-        } else {
-            std::string optMagicFile = config->getOption(CFG_IMPORT_MAGIC_FILE);
-            const char* magicFile = nullptr;
-            if (!optMagicFile.empty())
-                magicFile = optMagicFile.c_str();
-            if (magic_load(ms, magicFile) == -1) {
-                log_warning("magic_load: {}", magic_error(ms));
-                magic_close(ms);
-                ms = nullptr;
-            }
-        }
-    }
-#endif // HAVE_MAGIC
+
+    mime = std::make_shared<Mime>(config);
 
     std::string layout_type = config->getOption(CFG_IMPORT_SCRIPTING_VIRTUAL_LAYOUT_TYPE);
     if ((layout_type == "builtin") || (layout_type == "js"))
@@ -334,22 +298,24 @@ void ContentManager::shutdown()
     destroyLayout();
 
 #ifdef HAVE_INOTIFY
-    // update mofification time for database
-    for (size_t i = 0; i < autoscan_inotify->size(); i++) {
-        log_debug("AutoScanDir {}", i);
-        std::shared_ptr<AutoscanDirectory> dir = autoscan_inotify->get(i);
-        if (dir != nullptr) {
-            if (fs::is_directory(dir->getLocation())) {
-                auto t = getLastWriteTime(dir->getLocation());
-                dir->setCurrentLMT(dir->getLocation(), t);
+    if (autoscan_inotify) {
+        // update modification time for database
+        for (size_t i = 0; i < autoscan_inotify->size(); i++) {
+            log_debug("AutoScanDir {}", i);
+            std::shared_ptr<AutoscanDirectory> dir = autoscan_inotify->get(i);
+            if (dir != nullptr) {
+                if (fs::is_directory(dir->getLocation())) {
+                    auto t = getLastWriteTime(dir->getLocation());
+                    dir->setCurrentLMT(dir->getLocation(), t);
+                }
+                dir->updateLMT();
             }
-            dir->updateLMT();
         }
-    }
+        autoscan_inotify->updateLMinDB();
 
-    autoscan_inotify->updateLMinDB();
-    autoscan_inotify = nullptr;
-    inotify = nullptr;
+        autoscan_inotify = nullptr;
+        inotify = nullptr;
+    }
 #endif
 
     shutdownFlag = true;
@@ -368,12 +334,10 @@ void ContentManager::shutdown()
         pthread_join(taskThread, nullptr);
     taskThread = 0;
 
-#ifdef HAVE_MAGIC
-    if (ms) {
-        magic_close(ms);
-        ms = nullptr;
+    if (mime) {
+        mime = nullptr;
     }
-#endif
+
     log_debug("end");
     log_debug("ContentManager destroyed");
 }
@@ -429,7 +393,7 @@ void ContentManager::addVirtualItem(const std::shared_ptr<CdsObject>& obj, bool 
         if (pcdir == nullptr) {
             throw_std_runtime_error("Could not add " + path.string());
         }
-        if (IS_CDS_ITEM(pcdir->getObjectType())) {
+        if (pcdir->isItem()) {
             this->addObject(pcdir);
             obj->setRefID(pcdir->getID());
         }
@@ -449,14 +413,14 @@ std::shared_ptr<CdsObject> ContentManager::createSingleItem(const fs::path& path
             log_debug("Link to file or directory ignored: {}", path.c_str());
             return nullptr;
         }
-        if (IS_CDS_ITEM(obj->getObjectType())) {
+        if (obj->isItem()) {
             addObject(obj);
             isNew = true;
         }
-    } else if (IS_CDS_ITEM(obj->getObjectType()) && processExisting) {
-        MetadataHandler::setMetadata(config, std::static_pointer_cast<CdsItem>(obj));
+    } else if (obj->isItem() && processExisting) {
+        MetadataHandler::setMetadata(config, mime, std::static_pointer_cast<CdsItem>(obj));
     }
-    if (IS_CDS_ITEM(obj->getObjectType()) && layout != nullptr && (processExisting || isNew)) {
+    if (obj->isItem() && layout != nullptr && (processExisting || isNew)) {
         try {
             if (rootPath.empty() && (task != nullptr))
                 rootPath = task->getRootPath();
@@ -474,7 +438,7 @@ std::shared_ptr<CdsObject> ContentManager::createSingleItem(const fs::path& path
                 log_warning("Playlist {} will not be parsed: Gerbera was compiled without JS support!", obj->getLocation().c_str());
 #endif // JS
         } catch (const std::runtime_error& e) {
-            throw e;
+            log_error("{}", e.what());
         }
     }
     return obj;
@@ -504,7 +468,7 @@ int ContentManager::_addFile(const fs::path& path, fs::path rootPath, AutoScanSe
     if (obj == nullptr) // object ignored
         return INVALID_OBJECT_ID;
 
-    if (asSetting.recursive && IS_CDS_CONTAINER(obj->getObjectType())) {
+    if (asSetting.recursive && obj->isContainer()) {
         addRecursive(asSetting.adir, path, asSetting.followSymlinks, asSetting.hidden, task);
     }
 
@@ -595,7 +559,7 @@ void ContentManager::_rescanDirectory(std::shared_ptr<AutoscanDirectory>& adir, 
     if (containerID != INVALID_OBJECT_ID) {
         try {
             obj = database->loadObject(containerID);
-            if (!IS_CDS_CONTAINER(obj->getObjectType())) {
+            if (!obj->isContainer()) {
                 throw_std_runtime_error("Not a container");
             }
             if (containerID == CDS_ID_FS_ROOT)
@@ -707,7 +671,7 @@ void ContentManager::_rescanDirectory(std::shared_ptr<AutoscanDirectory>& adir, 
         // in this case we will invalidate the autoscan entry
         if (adir->getScanID() == INVALID_SCAN_ID) {
             log_info("lost autoscan for {}", newPath.c_str());
-            adir->setCurrentLMT(location, last_modified_new_max);
+            adir->setCurrentLMT(location, last_modified_new_max > 0 ? last_modified_new_max : (time_t)1);
             closedir(dir);
             return;
         }
@@ -756,6 +720,8 @@ void ContentManager::_rescanDirectory(std::shared_ptr<AutoscanDirectory>& adir, 
             }
         } else if (S_ISDIR(statbuf.st_mode) && asSetting.recursive) {
             int objectID = database->findObjectIDByPath(newPath);
+            if (last_modified_new_max < statbuf.st_mtime)
+                last_modified_new_max = statbuf.st_mtime;
             if (objectID > 0) {
                 log_debug("rescanSubDirectory {}", newPath.c_str());
                 if (list != nullptr)
@@ -776,7 +742,7 @@ void ContentManager::_rescanDirectory(std::shared_ptr<AutoscanDirectory>& adir, 
                 // in this case we will invalidate the autoscan entry
                 if (adir->getScanID() == INVALID_SCAN_ID) {
                     log_info("lost autoscan for {}", newPath.c_str());
-                    adir->setCurrentLMT(location, last_modified_new_max);
+                    adir->setCurrentLMT(location, last_modified_new_max > 0 ? last_modified_new_max : (time_t)1);
                     closedir(dir);
                     return;
                 }
@@ -791,7 +757,7 @@ void ContentManager::_rescanDirectory(std::shared_ptr<AutoscanDirectory>& adir, 
 
     closedir(dir);
 
-    adir->setCurrentLMT(location, last_modified_new_max);
+    adir->setCurrentLMT(location, last_modified_new_max > 0 ? last_modified_new_max : (time_t)1);
 
     if ((shutdownFlag) || ((task != nullptr) && !task->isValid())) {
         return;
@@ -884,15 +850,17 @@ void ContentManager::addRecursive(std::shared_ptr<AutoscanDirectory>& adir, cons
             // check database if parent, process existing
             auto obj = createSingleItem(newPath, rootPath, followSymlinks, (parentID > 0), true, task);
 
-            if (obj != nullptr && IS_CDS_ITEM(obj->getObjectType())) {
+            if (obj != nullptr) {
                 if (last_modified_current_max < statbuf.st_mtime) {
                     last_modified_new_max = statbuf.st_mtime;
                 }
-                parentID = obj->getParentID();
+                if (obj->isItem()) {
+                    parentID = obj->getParentID();
+                }
+                if (obj->isContainer()) {
+                    addRecursive(adir, newPath, followSymlinks, hidden, task);
+                }
             }
-
-            if (obj != nullptr && IS_CDS_CONTAINER(obj->getObjectType()))
-                addRecursive(adir, newPath, followSymlinks, hidden, task);
         } catch (const std::runtime_error& ex) {
             log_warning("skipping {} (ex:{})", newPath.c_str(), ex.what());
         }
@@ -900,11 +868,12 @@ void ContentManager::addRecursive(std::shared_ptr<AutoscanDirectory>& adir, cons
     closedir(dir);
 
     if (adir != nullptr) {
-        adir->setCurrentLMT(path, last_modified_new_max);
+        adir->setCurrentLMT(path, last_modified_new_max > 0 ? last_modified_new_max : (time_t)1);
     }
 }
 
-void ContentManager::updateObject(int objectID, const std::map<std::string, std::string>& parameters)
+template <typename T>
+void ContentManager::updateCdsObject(std::shared_ptr<T>& item, const std::map<std::string, std::string>& parameters)
 {
     std::string title = getValueOrDefault(parameters, "title");
     std::string upnp_class = getValueOrDefault(parameters, "class");
@@ -914,74 +883,107 @@ void ContentManager::updateObject(int objectID, const std::map<std::string, std:
     std::string location = getValueOrDefault(parameters, "location");
     std::string protocol = getValueOrDefault(parameters, "protocol");
 
+    log_error("updateCdsObject: CdsObject {} not updated", title);
+}
+
+template <>
+void ContentManager::updateCdsObject(std::shared_ptr<CdsContainer>& item, const std::map<std::string, std::string>& parameters)
+{
+    std::string title = getValueOrDefault(parameters, "title");
+    std::string upnp_class = getValueOrDefault(parameters, "class");
+
+    log_debug("updateCdsObject: CdsContainer {} updated", title);
+
+    auto clone = CdsObject::createObject(item->getObjectType());
+    item->copyTo(clone);
+
+    if (!title.empty())
+        clone->setTitle(title);
+    if (!upnp_class.empty())
+        clone->setClass(upnp_class);
+
+    auto cloned_item = std::static_pointer_cast<CdsContainer>(clone);
+
+    if (!item->equals(cloned_item, true)) {
+        clone->validate();
+        int containerChanged = INVALID_OBJECT_ID;
+        database->updateObject(clone, &containerChanged);
+        update_manager->containerChanged(containerChanged);
+        session_manager->containerChangedUI(containerChanged);
+        update_manager->containerChanged(item->getParentID());
+        session_manager->containerChangedUI(item->getParentID());
+    }
+}
+
+template <>
+void ContentManager::updateCdsObject(std::shared_ptr<CdsItem>& item, const std::map<std::string, std::string>& parameters)
+{
+    std::string title = getValueOrDefault(parameters, "title");
+    std::string upnp_class = getValueOrDefault(parameters, "class");
+    std::string mimetype = getValueOrDefault(parameters, "mime-type");
+    std::string description = getValueOrDefault(parameters, "description");
+    std::string location = getValueOrDefault(parameters, "location");
+    std::string protocol = getValueOrDefault(parameters, "protocol");
+
+    log_debug("updateCdsObject: CdsItem {} updated", title);
+
+    auto clone = CdsObject::createObject(item->getObjectType());
+    item->copyTo(clone);
+
+    if (!title.empty())
+        clone->setTitle(title);
+    if (!upnp_class.empty())
+        clone->setClass(upnp_class);
+    if (!location.empty())
+        clone->setLocation(location);
+
+    auto cloned_item = std::static_pointer_cast<CdsItem>(clone);
+
+    if (!mimetype.empty() && !protocol.empty()) {
+        cloned_item->setMimeType(mimetype);
+        auto resource = cloned_item->getResource(0);
+        resource->addAttribute(R_PROTOCOLINFO, renderProtocolInfo(mimetype, protocol));
+    } else if (mimetype.empty() && !protocol.empty()) {
+        auto resource = cloned_item->getResource(0);
+        resource->addAttribute(R_PROTOCOLINFO, renderProtocolInfo(cloned_item->getMimeType(), protocol));
+    } else if (!mimetype.empty()) {
+        cloned_item->setMimeType(mimetype);
+        auto resource = cloned_item->getResource(0);
+        std::vector<std::string> parts = splitString(resource->getAttribute(R_PROTOCOLINFO), ':');
+        protocol = parts[0];
+        resource->addAttribute(R_PROTOCOLINFO, renderProtocolInfo(mimetype, protocol));
+    }
+
+    if (!description.empty()) {
+        cloned_item->setMetadata(M_DESCRIPTION, description);
+    } else {
+        cloned_item->removeMetadata(M_DESCRIPTION);
+    }
+
+    log_debug("updateCdsObject: checking equality of item {}", item->getTitle().c_str());
+    if (!item->equals(cloned_item, true)) {
+        cloned_item->validate();
+        int containerChanged = INVALID_OBJECT_ID;
+        database->updateObject(clone, &containerChanged);
+        update_manager->containerChanged(containerChanged);
+        session_manager->containerChangedUI(containerChanged);
+        log_debug("updateObject: calling containerChanged on item {}", item->getTitle().c_str());
+        update_manager->containerChanged(item->getParentID());
+    }
+}
+
+void ContentManager::updateObject(int objectID, const std::map<std::string, std::string>& parameters)
+{
     auto obj = database->loadObject(objectID);
-    unsigned int objectType = obj->getObjectType();
-
-    if (IS_CDS_ITEM(objectType)) {
-        auto item = std::static_pointer_cast<CdsItem>(obj);
-        auto clone = CdsObject::createObject(objectType);
-        item->copyTo(clone);
-
-        if (!title.empty())
-            clone->setTitle(title);
-        if (!upnp_class.empty())
-            clone->setClass(upnp_class);
-        if (!location.empty())
-            clone->setLocation(location);
-
-        auto cloned_item = std::static_pointer_cast<CdsItem>(clone);
-
-        if (!mimetype.empty() && !protocol.empty()) {
-            cloned_item->setMimeType(mimetype);
-            auto resource = cloned_item->getResource(0);
-            resource->addAttribute(R_PROTOCOLINFO, renderProtocolInfo(mimetype, protocol));
-        } else if (mimetype.empty() && !protocol.empty()) {
-            auto resource = cloned_item->getResource(0);
-            resource->addAttribute(R_PROTOCOLINFO, renderProtocolInfo(cloned_item->getMimeType(), protocol));
-        } else if (!mimetype.empty()) {
-            cloned_item->setMimeType(mimetype);
-            auto resource = cloned_item->getResource(0);
-            std::vector<std::string> parts = splitString(resource->getAttribute(R_PROTOCOLINFO), ':');
-            protocol = parts[0];
-            resource->addAttribute(R_PROTOCOLINFO, renderProtocolInfo(mimetype, protocol));
-        }
-
-        if (!description.empty()) {
-            cloned_item->setMetadata(M_DESCRIPTION, description);
+    auto item = std::dynamic_pointer_cast<CdsItem>(obj);
+    if (item != nullptr) {
+        updateCdsObject(item, parameters);
+    } else {
+        auto cont = std::dynamic_pointer_cast<CdsContainer>(obj);
+        if (cont != nullptr) {
+            updateCdsObject(cont, parameters);
         } else {
-            cloned_item->removeMetadata(M_DESCRIPTION);
-        }
-
-        log_debug("updateObject: checking equality of item {}", item->getTitle().c_str());
-        if (!item->equals(cloned_item, true)) {
-            cloned_item->validate();
-            int containerChanged = INVALID_OBJECT_ID;
-            database->updateObject(clone, &containerChanged);
-            update_manager->containerChanged(containerChanged);
-            session_manager->containerChangedUI(containerChanged);
-            log_debug("updateObject: calling containerChanged on item {}", item->getTitle().c_str());
-            update_manager->containerChanged(item->getParentID());
-        }
-    } else if (IS_CDS_CONTAINER(objectType)) {
-        auto cont = std::static_pointer_cast<CdsContainer>(obj);
-        auto clone = CdsObject::createObject(objectType);
-        cont->copyTo(clone);
-
-        if (!title.empty())
-            clone->setTitle(title);
-        if (!upnp_class.empty())
-            clone->setClass(upnp_class);
-
-        auto cloned_item = std::static_pointer_cast<CdsContainer>(clone);
-
-        if (!cont->equals(cloned_item, true)) {
-            clone->validate();
-            int containerChanged = INVALID_OBJECT_ID;
-            database->updateObject(clone, &containerChanged);
-            update_manager->containerChanged(containerChanged);
-            session_manager->containerChangedUI(containerChanged);
-            update_manager->containerChanged(cont->getParentID());
-            session_manager->containerChangedUI(cont->getParentID());
+            updateCdsObject(obj, parameters);
         }
     }
 }
@@ -1007,7 +1009,7 @@ void ContentManager::addObject(const std::shared_ptr<CdsObject>& obj)
     }
 
     update_manager->containerChanged(obj->getParentID());
-    if (IS_CDS_CONTAINER(obj->getObjectType()))
+    if (obj->isContainer())
         session_manager->containerChangedUI(obj->getParentID());
 }
 
@@ -1052,7 +1054,7 @@ void ContentManager::updateObject(const std::shared_ptr<CdsObject>& obj, bool se
         session_manager->containerChangedUI(containerChanged);
 
         update_manager->containerChanged(obj->getParentID());
-        if (IS_CDS_CONTAINER(obj->getObjectType()))
+        if (obj->isContainer())
             session_manager->containerChangedUI(obj->getParentID());
     }
 }
@@ -1091,34 +1093,22 @@ std::shared_ptr<CdsObject> ContentManager::createObjectFromFile(const fs::path& 
     std::shared_ptr<CdsObject> obj;
     if (S_ISREG(statbuf.st_mode) || (allow_fifo && S_ISFIFO(statbuf.st_mode))) { // item
         /* retrieve information about item and decide if it should be included */
-        std::string mimetype;
-        std::string upnp_class;
-        std::string extension = path.extension();
-        if (!extension.empty())
-            extension.erase(0, 1); // remove leading .
-
-        if (magic) {
-            mimetype = extension2mimetype(extension);
-
-            if (mimetype.empty()) {
-                if (ignore_unknown_extensions)
-                    return nullptr; // item should be ignored
+        std::string mimetype = mime->extensionToMimeType(path);
+        if (mimetype.empty()) {
+            if (ignore_unknown_extensions)
+                return nullptr; // item should be ignored
 #ifdef HAVE_MAGIC
-                mimetype = getMIMETypeFromFile(path, followSymlinks);
+            mimetype = mime->fileToMimeType(path);
 #endif
-            }
         }
 
-        if (!mimetype.empty()) {
-            upnp_class = mimetype2upnpclass(mimetype);
-        }
-
+        std::string upnp_class = mime->mimeTypeToUpnpClass(mimetype);
         if (upnp_class.empty()) {
             std::string content_type = getValueOrDefault(mimetype_contenttype_map, mimetype);
             if (content_type == CONTENT_TYPE_OGG) {
                 upnp_class = isTheora(path)
-                    ? UPNP_DEFAULT_CLASS_VIDEO_ITEM
-                    : UPNP_DEFAULT_CLASS_MUSIC_TRACK;
+                    ? UPNP_CLASS_VIDEO_ITEM
+                    : UPNP_CLASS_MUSIC_TRACK;
             }
         }
 
@@ -1138,7 +1128,7 @@ std::shared_ptr<CdsObject> ContentManager::createObjectFromFile(const fs::path& 
         auto f2i = StringConverter::f2i(config);
         obj->setTitle(f2i->convert(path.filename()));
 
-        MetadataHandler::setMetadata(config, item);
+        MetadataHandler::setMetadata(config, mime, item);
     } else if (S_ISDIR(statbuf.st_mode)) {
         auto cont = std::make_shared<CdsContainer>();
         obj = cont;
@@ -1160,30 +1150,8 @@ std::shared_ptr<CdsObject> ContentManager::createObjectFromFile(const fs::path& 
     return obj;
 }
 
-std::string ContentManager::extension2mimetype(std::string extension)
-{
-    if (!extension_map_case_sensitive)
-        extension = toLower(extension);
-
-    return getValueOrDefault(extension_mimetype_map, extension);
-}
-
-std::string ContentManager::mimetype2upnpclass(const std::string& mimeType)
-{
-    auto it = mimetype_upnpclass_map.find(mimeType);
-    if (it != mimetype_upnpclass_map.end())
-        return it->second;
-
-    // try to match foo
-    std::vector<std::string> parts = splitString(mimeType, '/');
-    if (parts.size() != 2)
-        return "";
-    return getValueOrDefault(mimetype_upnpclass_map, parts[0] + "/*");
-}
-
 void ContentManager::initLayout()
 {
-
     if (layout == nullptr) {
         AutoLock lock(mutex);
         if (layout == nullptr) {
@@ -1448,7 +1416,7 @@ void ContentManager::removeObject(std::shared_ptr<AutoscanDirectory> adir, int o
             return;
         }
 
-        if (IS_CDS_CONTAINER(obj->getObjectType())) {
+        if (obj->isContainer()) {
             // make sure to remove possible child autoscan directories from the scanlist
             std::shared_ptr<AutoscanList> rm_list = autoscan_timed->removeIfSubdir(path);
             for (size_t i = 0; i < rm_list->size(); i++) {
@@ -1611,7 +1579,7 @@ void ContentManager::setAutoscanDirectory(const std::shared_ptr<AutoscanDirector
         else {
             log_debug("objectID: {}", dir->getObjectID());
             auto obj = database->loadObject(dir->getObjectID());
-            if (obj == nullptr || !IS_CDS_CONTAINER(obj->getObjectType()) || obj->isVirtual())
+            if (obj == nullptr || !obj->isContainer() || obj->isVirtual())
                 throw_std_runtime_error("tried to remove an illegal object (id) from the list of the autoscan directories");
 
             log_debug("location: {}", obj->getLocation().c_str());

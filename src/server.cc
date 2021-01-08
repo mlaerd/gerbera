@@ -290,8 +290,10 @@ void Server::shutdown()
     log_debug("now calling upnp finish");
     UpnpFinish();
 
-    content->shutdown();
-    content = nullptr;
+    if (content) {
+        content->shutdown();
+        content = nullptr;
+    }
 #ifdef HAVE_LASTFMLIB
     last_fm->shutdown();
     last_fm = nullptr;
@@ -437,15 +439,15 @@ void Server::routeActionRequest(const std::unique_ptr<ActionRequest>& request) c
     }
 
     // we need to match the serviceID to one of our services
-    if (request->getServiceID() == DESC_CM_SERVICE_ID) {
+    if (request->getServiceID() == UPNP_DESC_CM_SERVICE_ID) {
         // this call is for the lifetime stats service
         // log_debug("request for connection manager service");
         cmgr->processActionRequest(request);
-    } else if (request->getServiceID() == DESC_CDS_SERVICE_ID) {
+    } else if (request->getServiceID() == UPNP_DESC_CDS_SERVICE_ID) {
         // this call is for the toaster control service
         //log_debug("routeActionRequest: request for content directory service");
         cds->processActionRequest(request);
-    } else if (request->getServiceID() == DESC_MRREG_SERVICE_ID) {
+    } else if (request->getServiceID() == UPNP_DESC_MRREG_SERVICE_ID) {
         mrreg->processActionRequest(request);
     } else {
         // cp is asking for a nonexistent service, or for a service
@@ -465,15 +467,15 @@ void Server::routeSubscriptionRequest(const std::unique_ptr<SubscriptionRequest>
     }
 
     // we need to match the serviceID to one of our services
-    if (request->getServiceID() == DESC_CDS_SERVICE_ID) {
+    if (request->getServiceID() == UPNP_DESC_CDS_SERVICE_ID) {
         // this call is for the content directory service
         //log_debug("routeSubscriptionRequest: request for content directory service");
         cds->processSubscriptionRequest(request);
-    } else if (request->getServiceID() == DESC_CM_SERVICE_ID) {
+    } else if (request->getServiceID() == UPNP_DESC_CM_SERVICE_ID) {
         // this call is for the connection manager service
         //log_debug("routeSubscriptionRequest: request for connection manager service");
         cmgr->processSubscriptionRequest(request);
-    } else if (request->getServiceID() == DESC_MRREG_SERVICE_ID) {
+    } else if (request->getServiceID() == UPNP_DESC_MRREG_SERVICE_ID) {
         mrreg->processSubscriptionRequest(request);
     } else {
         // cp asks for a nonexistent service or for a service that
@@ -496,7 +498,7 @@ std::unique_ptr<RequestHandler> Server::createRequestHandler(const char* filenam
     std::unique_ptr<RequestHandler> ret = nullptr;
 
     if (startswith(link, std::string("/") + SERVER_VIRTUAL_DIR + "/" + CONTENT_MEDIA_HANDLER)) {
-        ret = std::make_unique<FileRequestHandler>(config, database, content, update_manager, session_manager, xmlbuilder.get());
+        ret = std::make_unique<FileRequestHandler>(content, xmlbuilder.get());
     } else if (startswith(link, std::string("/") + SERVER_VIRTUAL_DIR + "/" + CONTENT_UI_HANDLER)) {
         std::string parameters;
         std::string path;
@@ -508,18 +510,18 @@ std::unique_ptr<RequestHandler> Server::createRequestHandler(const char* filenam
         auto it = params.find(URL_REQUEST_TYPE);
         std::string r_type = it != params.end() && !it->second.empty() ? it->second : "index";
 
-        ret = web::createWebRequestHandler(config, database, content, session_manager, r_type);
+        ret = web::createWebRequestHandler(content, r_type);
     } else if (startswith(link, std::string("/") + SERVER_VIRTUAL_DIR + "/" + DEVICE_DESCRIPTION_PATH)) {
-        ret = std::make_unique<DeviceDescriptionHandler>(config, database, xmlbuilder.get());
+        ret = std::make_unique<DeviceDescriptionHandler>(content, xmlbuilder.get());
     } else if (startswith(link, std::string("/") + SERVER_VIRTUAL_DIR + "/" + CONTENT_SERVE_HANDLER)) {
         if (!config->getOption(CFG_SERVER_SERVEDIR).empty())
-            ret = std::make_unique<ServeRequestHandler>(config, database);
+            ret = std::make_unique<ServeRequestHandler>(content);
         else
             throw_std_runtime_error("Serving directories is not enabled in configuration");
     }
 #if defined(HAVE_CURL)
     else if (startswith(link, std::string("/") + SERVER_VIRTUAL_DIR + "/" + CONTENT_ONLINE_HANDLER)) {
-        ret = std::make_unique<URLRequestHandler>(config, database, content);
+        ret = std::make_unique<URLRequestHandler>(content);
     }
 #endif
     else {
@@ -534,8 +536,10 @@ int Server::registerVirtualDirCallbacks()
     log_debug("Setting UpnpVirtualDir GetInfoCallback");
     int ret = UpnpVirtualDir_set_GetInfoCallback([](const char* filename, UpnpFileInfo* info, const void* cookie, const void** requestCookie) -> int {
         try {
-            auto reqHandler = static_cast<const Server *>(cookie)->createRequestHandler(filename);
-            reqHandler->getInfo(filename, info);
+            auto reqHandler = static_cast<const Server*>(cookie)->createRequestHandler(filename);
+            std::string link = urlUnescape(filename);
+            reqHandler->getInfo(link.c_str(), info);
+            return 0;
         } catch (const ServerShutdownException& se) {
             return -1;
         } catch (const SubtitlesNotFoundException& sex) {
@@ -545,17 +549,16 @@ int Server::registerVirtualDirCallbacks()
             log_error("{}", e.what());
             return -1;
         }
-        return 0; });
+    });
     if (ret != 0)
         return ret;
 
     log_debug("Setting UpnpVirtualDir OpenCallback");
     ret = UpnpVirtualDir_set_OpenCallback([](const char* filename, enum UpnpOpenFileMode mode, const void* cookie, const void* requestCookie) -> UpnpWebFileHandle {
-        std::string link = urlUnescape(filename);
-
         try {
             auto reqHandler = static_cast<const Server*>(cookie)->createRequestHandler(filename);
-            auto ioHandler = reqHandler->open(link.c_str(), mode, "");
+            std::string link = urlUnescape(filename);
+            auto ioHandler = reqHandler->open(link.c_str(), mode);
             auto ioPtr = static_cast<UpnpWebFileHandle>(ioHandler.release());
             //log_debug("%p open({})", ioPtr, filename);
             return ioPtr;
@@ -598,20 +601,19 @@ int Server::registerVirtualDirCallbacks()
         try {
             auto handler = static_cast<IOHandler*>(f);
             handler->seek(offset, whence);
+            return 0;
         } catch (const std::runtime_error& e) {
             log_error("Exception during seek: {}", e.what());
             return -1;
         }
-
-        return 0;
     });
     if (ret != UPNP_E_SUCCESS)
         return ret;
 
     log_debug("Setting UpnpVirtualDir CloseCallback");
-    UpnpVirtualDir_set_CloseCallback([](UpnpWebFileHandle f, const void* cookie, const void* requestCookie) -> int {
-        int ret_close = 0;
+    ret = UpnpVirtualDir_set_CloseCallback([](UpnpWebFileHandle f, const void* cookie, const void* requestCookie) -> int {
         //log_debug("%p close()", f);
+        int ret_close = 0;
         auto handler = static_cast<IOHandler*>(f);
         try {
             handler->close();

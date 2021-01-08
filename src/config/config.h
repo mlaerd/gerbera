@@ -4,7 +4,7 @@
     
     config.h - this file is part of Gerbera.
     
-    Copyright (C) 2020-2020 Gerbera Contributors
+    Copyright (C) 2020-2021 Gerbera Contributors
     
     Gerbera is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License version 2
@@ -241,6 +241,8 @@ typedef enum {
     ATTR_AUTOSCAN_DIRECTORY_INTERVAL,
     ATTR_AUTOSCAN_DIRECTORY_RECURSIVE,
     ATTR_AUTOSCAN_DIRECTORY_HIDDENFILES,
+    ATTR_AUTOSCAN_DIRECTORY_SCANCOUNT,
+    ATTR_AUTOSCAN_DIRECTORY_LMT,
     ATTR_CLIENTS_CLIENT,
     ATTR_CLIENTS_CLIENT_FLAGS,
     ATTR_CLIENTS_CLIENT_IP,

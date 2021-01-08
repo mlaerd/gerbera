@@ -600,18 +600,21 @@ std::string getProtocol(const std::string& protocolInfo)
     return (pos == std::string::npos || pos == 0) ? "http-get" : protocolInfo.substr(0, pos);
 }
 
-std::string secondsToHMS(int seconds)
+std::string millisecondsToHMSF(int milliseconds)
 {
-    auto s = seconds % 60;
-    seconds /= 60;
+    auto ms = milliseconds % 1000;
+    milliseconds /= 1000;
 
-    auto m = seconds % 60;
-    auto h = std::min(seconds / 60, 999);
+    auto s = milliseconds % 60;
+    milliseconds /= 60;
 
-    return fmt::format("{:02}:{:02}:{:02}", h, m, s);
+    auto m = milliseconds % 60;
+    auto h = milliseconds / 60;
+
+    return fmt::format("{:01}:{:02}:{:02}.{:03}", h, m, s, ms);
 }
 
-int HMSToSeconds(const std::string& time)
+int HMSFToMilliseconds(const std::string& time)
 {
     if (time.empty()) {
         log_warning("Could not convert time representation to seconds!");
@@ -621,46 +624,11 @@ int HMSToSeconds(const std::string& time)
     int hours = 0;
     int minutes = 0;
     int seconds = 0;
-    sscanf(time.c_str(), "%d:%d:%d", &hours, &minutes, &seconds);
+    int ms = 0;
+    sscanf(time.c_str(), "%d:%d:%d.%d", &hours, &minutes, &seconds, &ms);
 
-    return (hours * 3600) + (minutes * 60) + seconds;
+    return ((hours * 3600) + (minutes * 60) + seconds) * 1000 + ms;
 }
-
-#ifdef HAVE_MAGIC
-std::string getMIMETypeFromFile(const fs::path& file, bool allowSymlinks)
-{
-    return getMIME(file, nullptr, -1, allowSymlinks);
-}
-
-std::string getMIMETypeFromBuffer(const void* buffer, size_t length)
-{
-    return getMIME("", buffer, length, false);
-}
-
-std::string getMIME(const fs::path& filepath, const void* buffer, size_t length, bool allowSymlinks)
-{
-    int magicFlags = allowSymlinks ? MAGIC_MIME_TYPE | MAGIC_SYMLINK : MAGIC_MIME_TYPE;
-
-    /* MAGIC_MIME_TYPE tells magic to return ONLY the mimetype */
-    magic_t magic_cookie = magic_open(magicFlags);
-
-    if (magic_cookie == nullptr) {
-        log_warning("Failed to initialize libmagic");
-        return "";
-    }
-
-    if (magic_load(magic_cookie, nullptr) != 0) {
-        log_warning("Failed to load magic database: {}", magic_error(magic_cookie));
-        magic_close(magic_cookie);
-        return "";
-    }
-
-    const char* mime = filepath.empty() ? magic_buffer(magic_cookie, buffer, length) : magic_file(magic_cookie, filepath.c_str());
-    std::string out = mime;
-    magic_close(magic_cookie);
-    return out;
-}
-#endif
 
 bool checkResolution(const std::string& resolution, int* x, int* y)
 {
@@ -1081,22 +1049,22 @@ std::string getDLNAprofileString(const std::string& contentType)
 {
     std::string profile;
     if (contentType == CONTENT_TYPE_MP4)
-        profile = D_PN_AVC_MP4_EU;
+        profile = UPNP_DLNA_PROFILE_AVC_MP4_EU;
     else if (contentType == CONTENT_TYPE_MKV)
-        profile = D_PN_MKV;
+        profile = UPNP_DLNA_PROFILE_MKV;
     else if (contentType == CONTENT_TYPE_AVI)
-        profile = D_PN_AVI;
+        profile = UPNP_DLNA_PROFILE_AVI;
     else if (contentType == CONTENT_TYPE_MPEG)
-        profile = D_PN_MPEG_PS_PAL;
+        profile = UPNP_DLNA_PROFILE_MPEG_PS_PAL;
     else if (contentType == CONTENT_TYPE_MP3)
-        profile = D_MP3;
+        profile = UPNP_DLNA_PROFILE_MP3;
     else if (contentType == CONTENT_TYPE_PCM)
-        profile = D_LPCM;
+        profile = UPNP_DLNA_PROFILE_LPCM;
     else
         profile = "";
 
     if (!profile.empty())
-        profile = std::string(D_PROFILE) + "=" + profile;
+        profile = std::string(UPNP_DLNA_PROFILE) + "=" + profile;
     return profile;
 }
 
@@ -1105,10 +1073,10 @@ std::string getDLNAContentHeader(const std::shared_ptr<Config>& config, const st
     std::string content_parameter;
     content_parameter = getDLNAprofileString(contentType);
     if (!content_parameter.empty())
-        content_parameter = D_PROFILE + std::string("=") + content_parameter + ";";
-    content_parameter = content_parameter + D_OP + "=" + D_OP_SEEK_ENABLED + ";";
-    content_parameter = content_parameter + D_CONVERSION_INDICATOR + "=" + D_NO_CONVERSION + ";";
-    content_parameter = content_parameter + D_FLAGS "=" D_TR_FLAGS_AV;
+        content_parameter += std::string(";");
+    content_parameter += std::string(UPNP_DLNA_OP) + "=" + UPNP_DLNA_OP_SEEK_RANGE + ";";
+    content_parameter += std::string(UPNP_DLNA_CONVERSION_INDICATOR) + "=" + UPNP_DLNA_NO_CONVERSION + ";";
+    content_parameter += std::string(UPNP_DLNA_FLAGS "=" UPNP_DLNA_ORG_FLAGS_AV);
     return content_parameter;
 }
 
@@ -1116,9 +1084,9 @@ std::string getDLNATransferHeader(const std::shared_ptr<Config>& config, const s
 {
     std::string transfer_parameter;
     if (startswith(mimeType, "image"))
-        transfer_parameter = D_HTTP_TRANSFER_MODE_INTERACTIVE;
+        transfer_parameter = UPNP_DLNA_TRANSFER_MODE_INTERACTIVE;
     else if (startswith(mimeType, "audio") || startswith(mimeType, "video"))
-        transfer_parameter = D_HTTP_TRANSFER_MODE_STREAMING;
+        transfer_parameter = UPNP_DLNA_TRANSFER_MODE_STREAMING;
     return transfer_parameter;
 }
 

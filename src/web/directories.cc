@@ -37,9 +37,8 @@
 #include "util/string_converter.h"
 #include "util/tools.h"
 
-web::directories::directories(std::shared_ptr<Config> config, std::shared_ptr<Database> database,
-    std::shared_ptr<ContentManager> content, std::shared_ptr<SessionManager> sessionManager)
-    : WebRequestHandler(std::move(config), std::move(database), std::move(content), std::move(sessionManager))
+web::directories::directories(std::shared_ptr<ContentManager> content)
+    : WebRequestHandler(std::move(content))
 {
 }
 
@@ -120,12 +119,12 @@ void web::directories::process()
         filesMap[id] = { filepath.filename(), hasContent };
     }
 
+    auto f2i = StringConverter::f2i(config);
     for (const auto& [key, val] : filesMap) {
         auto ce = containers.append_child("container");
         ce.append_attribute("id") = key.c_str();
         ce.append_attribute("child_count") = val.hasContent;
 
-        auto f2i = StringConverter::f2i(config);
         ce.append_attribute("title") = f2i->convert(val.filename).c_str();
     }
 }

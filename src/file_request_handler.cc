@@ -51,15 +51,8 @@
 
 #include "transcoding/transcode_dispatcher.h"
 
-FileRequestHandler::FileRequestHandler(std::shared_ptr<Config> config,
-    std::shared_ptr<Database> database,
-    std::shared_ptr<ContentManager> content,
-    std::shared_ptr<UpdateManager> updateManager, std::shared_ptr<web::SessionManager> sessionManager,
-    UpnpXMLBuilder* xmlBuilder)
-    : RequestHandler(std::move(config), std::move(database))
-    , content(std::move(content))
-    , updateManager(std::move(updateManager))
-    , sessionManager(std::move(sessionManager))
+FileRequestHandler::FileRequestHandler(std::shared_ptr<ContentManager> content, UpnpXMLBuilder* xmlBuilder)
+    : RequestHandler(std::move(content))
     , xmlBuilder(xmlBuilder)
 {
 }
@@ -74,30 +67,13 @@ void FileRequestHandler::getInfo(const char* filename, UpnpFileInfo* info)
 
     auto headers = std::make_unique<Headers>();
 
-    std::string tr_profile;
-    int ret = 0;
+    auto params = parseParameters(filename, LINK_FILE_REQUEST_HANDLER);
+    auto obj = getObjectById(params);
 
-    std::string parameters = (filename + strlen(LINK_FILE_REQUEST_HANDLER));
-
-    std::map<std::string, std::string> params;
-    dictDecodeSimple(parameters, &params);
-
-    log_debug("full url (filename): {}, parameters: {}", filename, parameters.c_str());
-
-    auto objIdIt = params.find("object_id");
-    if (objIdIt == params.end()) {
-        //log_error("object_id not found in url");
-        throw_std_runtime_error("getInfo: object_id not found");
-    }
-    int objectID = std::stoi(objIdIt->second);
-    //log_debug("got ObjectID: {}", objectID);
-
-    auto obj = database->loadObject(objectID);
-
-    int objectType = obj->getObjectType();
-    if (!IS_CDS_ITEM(objectType)) {
+    if (!obj->isItem()) {
         throw_std_runtime_error("requested object is not an item");
     }
+
     auto item = std::static_pointer_cast<CdsItem>(obj);
 
     // determining which resource to serve
@@ -130,7 +106,7 @@ void FileRequestHandler::getInfo(const char* filename, UpnpFileInfo* info)
     }
 
     struct stat statbuf;
-    ret = stat(path.c_str(), &statbuf);
+    int ret = stat(path.c_str(), &statbuf);
     if (ret != 0) {
         if (is_srt)
             throw SubtitlesNotFoundException("Subtitle file " + path.string() + " is not available.");
@@ -151,7 +127,7 @@ void FileRequestHandler::getInfo(const char* filename, UpnpFileInfo* info)
     }
 
     // for transcoded resourecs res_id will always be negative
-    tr_profile = getValueOrDefault(params, URL_PARAM_TRANSCODE_PROFILE_NAME);
+    std::string tr_profile = getValueOrDefault(params, URL_PARAM_TRANSCODE_PROFILE_NAME);
 
     log_debug("fetching resource id {}", res_id);
 
@@ -173,7 +149,7 @@ void FileRequestHandler::getInfo(const char* filename, UpnpFileInfo* info)
             }
         }
 
-        auto h = MetadataHandler::createHandler(config, res_handler);
+        auto h = MetadataHandler::createHandler(config, mime, res_handler);
         if (mimeType.empty())
             mimeType = h->getMimeType();
 
@@ -217,7 +193,7 @@ void FileRequestHandler::getInfo(const char* filename, UpnpFileInfo* info)
             CFG_IMPORT_MAPPINGS_MIMETYPE_TO_CONTENTTYPE_LIST);
         std::string dlnaContentHeader = getDLNAContentHeader(config, getValueOrDefault(mappings, item->getMimeType()));
         if (!dlnaContentHeader.empty()) {
-            headers->addHeader(D_HTTP_CONTENT_FEATURES_HEADER, dlnaContentHeader);
+            headers->addHeader(UPNP_DLNA_CONTENT_FEATURES_HEADER, dlnaContentHeader);
         }
     }
 
@@ -226,7 +202,7 @@ void FileRequestHandler::getInfo(const char* filename, UpnpFileInfo* info)
 
     std::string dlnaTransferHeader = getDLNATransferHeader(config, mimeType);
     if (!dlnaTransferHeader.empty()) {
-        headers->addHeader(D_HTTP_TRANSFER_MODE_HEADER, dlnaTransferHeader);
+        headers->addHeader(UPNP_DLNA_TRANSFER_MODE_HEADER, dlnaTransferHeader);
     }
 
     //log_debug("sizeof off_t {}, statbuf.st_size {}", sizeof(off_t), sizeof(statbuf.st_size));
@@ -248,8 +224,7 @@ void FileRequestHandler::getInfo(const char* filename, UpnpFileInfo* info)
     log_debug("web_get_info(): end");
 }
 
-std::unique_ptr<IOHandler> FileRequestHandler::open(const char* filename,
-    enum UpnpOpenFileMode mode, const std::string& range)
+std::unique_ptr<IOHandler> FileRequestHandler::open(const char* filename, enum UpnpOpenFileMode mode)
 {
     log_debug("start");
 
@@ -258,25 +233,14 @@ std::unique_ptr<IOHandler> FileRequestHandler::open(const char* filename,
         throw_std_runtime_error("UPNP_WRITE unsupported");
     }
 
-    std::string parameters = (filename + strlen(LINK_FILE_REQUEST_HANDLER));
+    auto params = parseParameters(filename, LINK_FILE_REQUEST_HANDLER);
+    auto obj = getObjectById(params);
 
-    std::map<std::string, std::string> params;
-    dictDecodeSimple(parameters, &params);
-    log_debug("full url (filename): {}, parameters: {}", filename, parameters.c_str());
-
-    auto objIdIt = params.find("object_id");
-    if (objIdIt == params.end()) {
-        throw_std_runtime_error("object_id not found in parameters");
-    }
-    int objectID = std::stoi(objIdIt->second);
-
-    log_debug("Opening media file with object id {}", objectID);
-    auto obj = database->loadObject(objectID);
-
-    int objectType = obj->getObjectType();
-    if (!IS_CDS_ITEM(objectType)) {
+    if (!obj->isItem()) {
         throw_std_runtime_error("requested object is not an item");
     }
+
+    auto item = std::static_pointer_cast<CdsItem>(obj);
 
     // determining which resource to serve
     size_t res_id = 0;
@@ -286,12 +250,9 @@ std::unique_ptr<IOHandler> FileRequestHandler::open(const char* filename,
     else
         res_id = SIZE_MAX;
 
-    auto item = std::static_pointer_cast<CdsItem>(obj);
-
     fs::path path = item->getLocation();
     bool is_srt = false;
 
-    std::string mimeType;
     std::string ext = getValueOrDefault(params, "ext");
     size_t edot = ext.rfind('.');
     if (edot != std::string::npos)
@@ -300,7 +261,6 @@ std::unique_ptr<IOHandler> FileRequestHandler::open(const char* filename,
         // remove .ext
         std::string pathNoExt = path.parent_path() / path.stem();
         path = pathNoExt + ext;
-        mimeType = MIMETYPE_TEXT;
 
         // reset resource id
         res_id = 0;
@@ -338,31 +298,12 @@ std::unique_ptr<IOHandler> FileRequestHandler::open(const char* filename,
         else {
             auto resource = item->getResource(res_id);
             res_handler = resource->getHandlerType();
-            // http-get:*:image/jpeg:*
-            std::string protocolInfo = getValueOrDefault(item->getResource(res_id)->getAttributes(), "protocolInfo");
-            if (!protocolInfo.empty()) {
-                mimeType = getMTFromProtocolInfo(protocolInfo);
-            }
         }
 
-        auto h = MetadataHandler::createHandler(config, res_handler);
-        if (mimeType.empty())
-            mimeType = h->getMimeType();
-
-        /* FIXME Upstream upnp / DNLA
-#ifdef EXTEND_PROTOCOLINFO
-        header = getDLNAtransferHeader(mimeType, header);
-#endif
-
-        if (!header.empty())
-                info->http_header = ixmlCloneDOMString(header.c_str());
-        */
-
-        //info->content_type = ixmlCloneDOMString(mimeType.c_str());
-        //auto io_handler = h->serveContent(item, res_id, &(info->file_length));
-
+        auto h = MetadataHandler::createHandler(config, mime, res_handler);
         auto io_handler = h->serveContent(item, res_id);
         io_handler->open(mode);
+
         log_debug("end");
         return io_handler;
     }
@@ -373,38 +314,18 @@ std::unique_ptr<IOHandler> FileRequestHandler::open(const char* filename,
         auto tr_d = std::make_unique<TranscodeDispatcher>(config, content);
         auto tp = config->getTranscodingProfileListOption(CFG_TRANSCODING_PROFILE_LIST)
                       ->getByName(tr_profile);
-        return tr_d->open(tp, path, item, range);
+
+        auto io_handler = tr_d->serveContent(tp, path, item, range);
+        io_handler->open(mode);
+
+        log_debug("end");
+        return io_handler;
     }
-
-    if (mimeType.empty())
-        mimeType = item->getMimeType();
-
-    /* FIXME Upstream headers / DNLA
-    info->file_length = statbuf.st_size;
-    info->content_type = ixmlCloneDOMString(mimeType.c_str());
-
-    log_debug("Adding content disposition header: {}",
-              header.c_str());
-    // if we are dealing with a regular file we should add the
-    // Accept-Ranges: bytes header, in order to indicate that we support
-    // seeking
-    if (S_ISREG(statbuf.st_mode))
-    {
-        if (!header.empty())
-            header = header + "\r\n";
-
-         header = header + "Accept-Ranges: bytes";
-    }
-
-    header = getDLNAtransferHeader(mimeType, header);
-
-    if (!header.empty())
-        info->http_header = ixmlCloneDOMString(header.c_str());
-    */
 
     auto io_handler = std::make_unique<FileIOHandler>(path);
     io_handler->open(mode);
     content->triggerPlayHook(obj);
+
     log_debug("end");
     return io_handler;
 }
