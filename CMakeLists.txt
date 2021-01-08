@@ -47,7 +47,7 @@ set(WITH_DEBUG          1 CACHE BOOL "Enables debug logging")
 set(WITH_TESTS          0 CACHE BOOL "Enables Unit Tests")
 
 # Warnings are nice
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -Wall")
 
 # Add the automatically determined parts of the RPATH which point to
 # directories outside the build tree to the install RPATH
@@ -488,7 +488,6 @@ if(WITH_MATROSKA)
     find_package(EBML)
     if (EBML_FOUND)
         include_directories(${EBML_INCLUDE_DIRS})
-        target_link_libraries(libgerbera ${EBML_LIBRARIES})
     else()
        message(FATAL_ERROR "EBML not found")
     endif()
@@ -497,6 +496,7 @@ if(WITH_MATROSKA)
     if (Matroska_FOUND)
         include_directories(${Matroska_INCLUDE_DIRS})
         target_link_libraries(libgerbera ${Matroska_LIBRARIES})
+        target_link_libraries(libgerbera ${EBML_LIBRARIES})
     else()
         message(FATAL_ERROR "Matroska not found")
     endif()
